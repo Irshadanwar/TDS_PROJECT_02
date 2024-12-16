@@ -1,162 +1,97 @@
 import os
+import sys
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.ensemble import IsolationForest
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
-import requests
-from google.colab import files
+import matplotlib.pyplot as plt
+import openai
 
-# OpenAI Token Setup (set your token manually here)
-AIPROXY_TOKEN = "API"
+# Ensure the environment variable for AI Proxy token is set
+AIPROXY_TOKEN = os.getenv("AIPROXY_TOKEN")
+if not AIPROXY_TOKEN:
+    sys.exit("Error: AIPROXY_TOKEN environment variable not set.")
 
-# Upload file from your local system
-print("Please upload the CSV file:")
-uploaded = files.upload()
+# Initialize OpenAI client
+openai.api_key = AIPROXY_TOKEN
 
-# Get the filename
-filename = next(iter(uploaded))  # Get the first (and in this case, only) uploaded file
-out_dir = filename.split('.')[0]
-os.makedirs(out_dir, exist_ok=True)
-
-# Read the CSV file
-try:
-    # Try reading with UTF-8 first
-    data = pd.read_csv(filename, encoding="utf-8")
-    print(f"Successfully loaded {filename} with UTF-8 encoding")
-except UnicodeDecodeError:
-    # Fallback to ISO-8859-1 if UTF-8 fails
+def analyze_dataset(file_path):
+    """Load and analyze the dataset."""
     try:
-        data = pd.read_csv(filename, encoding="ISO-8859-1")
-        print(f"Successfully loaded {filename} with ISO-8859-1 encoding")
+        df = pd.read_csv(file_path)
     except Exception as e:
-        print(f"Error loading {filename}: {e}")
-        raise
+        sys.exit(f"Error loading file {file_path}: {e}")
 
-# Show basic info about the data
-print("Dataset Overview:")
-print(data.info())
-print("First 5 Rows:")
-print(data.head())
+    analysis = {
+        "columns": list(df.columns),
+        "dtypes": df.dtypes.apply(str).to_dict(),
+        "summary_stats": df.describe(include='all').to_dict(),
+        "missing_values": df.isnull().sum().to_dict()
+    }
+    return df, analysis
 
-# Analyze missing values
-print("\nMissing Values:")
-missing_values = data.isnull().sum()
-print(missing_values[missing_values > 0])
+def generate_visualizations(df, output_dir):
+    """Generate and save visualizations (correlation heatmap and distribution)."""
+    numeric_columns = df.select_dtypes(include=['number']).columns
 
-# Handle missing values
-print("\nHandling Missing Values:")
-for column in missing_values.index:
-    if data[column].dtype in ["float64", "int64"]:  # Numerical columns
-        data[column].fillna(data[column].mean(), inplace=True)
-        print(f"Filled missing values in '{column}' with mean: {data[column].mean()}")
-    elif data[column].dtype == "object":  # Categorical columns
-        data[column].fillna(data[column].mode()[0], inplace=True)
-        print(f"Filled missing values in '{column}' with mode: {data[column].mode()[0]}")
+    if numeric_columns.size > 1:
+        corr = df[numeric_columns].corr()
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(corr, annot=True, cmap="coolwarm")
+        plt.title("Correlation Heatmap")
+        plt.savefig(os.path.join(output_dir, "correlation_heatmap.png"))
+        plt.close()
 
-print("\nMissing values handled successfully!")
+    if numeric_columns.size > 0:
+        plt.figure(figsize=(8, 6))
+        sns.histplot(df[numeric_columns[0]], kde=True)
+        plt.title(f"Distribution of {numeric_columns[0]}")
+        plt.savefig(os.path.join(output_dir, f"{numeric_columns[0]}_distribution.png"))
+        plt.close()
 
-# Correlation matrix for numerical columns
-print("\nCorrelation Matrix:")
-numerical_columns = data.select_dtypes(include=["float64", "int64"])  # Select only numeric columns
-correlation_matrix = numerical_columns.corr()
-print(correlation_matrix)
+def narrate_story(analysis, output_dir):
+    """Generate a narrative summary using OpenAI's GPT model."""
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a data scientist narrating the story of a dataset."},
+                {"role": "user", "content": f"Here's the analysis of the dataset: {analysis}"}
+            ]
+        )
+        story = response['choices'][0]['message']['content']
+    except Exception as e:
+        story = f"Error generating narrative: {e}"
+    
+    with open(os.path.join(output_dir, "README.md"), "w") as f:
+        f.write(story)
 
-# Save the correlation heatmap as a PNG file
-plt.figure(figsize=(12, 8))
-sns.heatmap(correlation_matrix, annot=True, fmt=".2f", cmap="coolwarm", cbar=True)
-plt.title("Correlation Matrix Heatmap")
-plt.savefig(f"{out_dir}/correlation_matrix.png")
-print(f"Correlation heatmap saved as '{out_dir}/correlation_matrix.png'")
+def analyze_and_generate_output(file_path):
+    """Perform the analysis and generate output files."""
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    output_dir = os.path.join(".", base_name)
+    os.makedirs(output_dir, exist_ok=True)
 
-# Outlier detection using Isolation Forest
-print("\nDetecting Outliers with Isolation Forest:")
-if "average_rating" in numerical_columns and "ratings_count" in numerical_columns:
-    features = numerical_columns[["average_rating", "ratings_count"]]
-else:
-    features = numerical_columns.iloc[:, :2]  # Use first two numeric columns if specific ones are missing
-isolation_forest = IsolationForest(random_state=42, contamination=0.05)
-isolation_forest.fit(features)
+    df, analysis = analyze_dataset(file_path)
+    generate_visualizations(df, output_dir)
+    narrate_story(analysis, output_dir)
 
-# Predict anomalies (1 for inliers, -1 for outliers)
-predictions = isolation_forest.predict(features)
-data["is_outlier"] = predictions
-outliers = data[data["is_outlier"] == -1]
+    return output_dir
 
-print(f"Number of outliers detected: {len(outliers)}")
+def main():
+    """Main function to process datasets."""
+    if len(sys.argv) < 2:
+        sys.exit("Usage: python autolysis.py dataset1.csv dataset2.csv ...")
 
-# Visualize inliers vs. outliers
-plt.figure(figsize=(8, 6))
-sns.scatterplot(
-    x=features.iloc[:, 0],
-    y=features.iloc[:, 1],
-    hue=predictions,
-    palette={1: "blue", -1: "red"},
-    legend="full"
-)
-plt.title("Isolation Forest Outlier Detection")
-plt.xlabel(features.columns[0])
-plt.ylabel(features.columns[1])
-plt.savefig(f"{out_dir}/outliers.png")
-print(f"Outlier visualization saved as '{out_dir}/outliers.png'")
+    file_paths = sys.argv[1:]
+    output_dirs = []
 
-# Clustering Analysis
-print("\nPerforming Clustering Analysis:")
-pca = PCA(n_components=2)
-reduced_features = pca.fit_transform(features)
-kmeans = KMeans(n_clusters=3, random_state=42)
-clusters = kmeans.fit_predict(reduced_features)
+    for file_path in file_paths:
+        if os.path.exists(file_path):
+            output_dir = analyze_and_generate_output(file_path)
+            output_dirs.append(output_dir)
+        else:
+            print(f"File {file_path} not found!")
 
-# Visualize clusters
-plt.figure(figsize=(8, 6))
-sns.scatterplot(
-    x=reduced_features[:, 0], y=reduced_features[:, 1], hue=clusters, palette="viridis")
-plt.title("Clustering Visualization")
-plt.savefig(f"{out_dir}/clustering.png")
-print(f"Clustering visualization saved as '{out_dir}/clustering.png'")
+    print(f"Analysis completed. Results saved in directories: {', '.join(output_dirs)}")
 
-# Use GPT-4o-Mini to narrate the story
-print("\nGenerating README.md using GPT-4o-Mini...")
-story_prompt = f"""
-You are an expert data analyst. Write a story about the analysis of a dataset. Include:
-1. A brief description of the dataset.
-2. The types of analysis performed (missing values, outliers, clustering).
-3. Key findings and insights.
-4. Implications and suggestions based on the findings.
-
-The dataset contains the following columns: {', '.join(data.columns)}.
-The analysis included:
-- Missing value handling.
-- Correlation analysis.
-- Outlier detection using Isolation Forest.
-- Clustering using K-Means.
-
-Provide the response in Markdown format.
-"""
-
-# Proxy API endpoint and headers
-proxy_url = "https://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
-headers = {
-    "Content-Type": "application/json",
-    "Authorization": f"Bearer {AIPROXY_TOKEN}",
-}
-
-# Chat Completion Data
-request_data = {
-    "model": "gpt-4o-mini",
-    "messages": [
-        {"role": "system", "content": "You are an expert data analyst."},
-        {"role": "user", "content": story_prompt},
-    ],
-}
-
-# API Request to the Proxy
-response = requests.post(proxy_url, headers=headers, json=request_data)
-if response.status_code == 200:
-    readme_content = response.json()["choices"][0]["message"]["content"]
-    with open(f"{out_dir}/README.md", "w") as f:
-        f.write(readme_content)
-    print(f"README.md generated and saved as '{out_dir}/README.md'")
-else:
-    print(f"Error: {response.status_code}, {response.text}")
+if __name__ == "__main__":
+    main()
