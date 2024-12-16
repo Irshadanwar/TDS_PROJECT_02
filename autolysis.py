@@ -3,11 +3,17 @@ import sys
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+from openai import ChatCompletion
 import openai
-import argparse
 
-# Set your OpenAI API key (you can also set it in the environment or config file)
-openai.api_key = "your_openai_api_key"  # Replace with your OpenAI API key
+# Ensure the environment variable for AI Proxy token is set
+AIPROXY_TOKEN = os.getenv("AIPROXY_TOKEN")
+if not AIPROXY_TOKEN:
+    print("Error: AIPROXY_TOKEN environment variable not set.")
+    sys.exit(1)
+
+# Initialize OpenAI client
+openai.api_key = AIPROXY_TOKEN
 
 def analyze_dataset(file_path):
     # Load the dataset
@@ -15,7 +21,7 @@ def analyze_dataset(file_path):
         df = pd.read_csv(file_path)
     except Exception as e:
         print(f"Error loading file: {e}")
-        return None, None
+        sys.exit(1)
 
     # Perform generic analysis
     analysis = {
@@ -46,49 +52,20 @@ def generate_visualizations(df, output_dir):
         plt.close()
 
 def narrate_story(analysis, output_dir):
-    # Start with a brief overview
-    story = "# Dataset Analysis Report\n\n"
-    story += "This document provides an analysis of the dataset, including its structure, statistical summary, and visualizations.\n\n"
+    # Generate a narrative using LLM
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a data scientist narrating the story of a dataset."},
+                {"role": "user", "content": f"Here's the analysis of the dataset: {analysis}"}
+            ]
+        )
+        story = response['choices'][0]['message']['content']
+    except Exception as e:
+        story = f"Error generating narrative: {e}"
     
-    # Dataset Overview
-    story += "## Dataset Overview\n"
-    row_count = analysis['summary_stats'].get('count', {}).get('count', 'N/A')
-    column_count = len(analysis['columns'])
-    story += f"The dataset contains {column_count} columns and {row_count} rows.\n\n"
-    
-    story += "### Columns in the dataset:\n"
-    for col in analysis['columns']:
-        story += f"- {col}\n"
-    
-    story += "\n### Data Types:\n"
-    for col, dtype in analysis['dtypes'].items():
-        story += f"- {col}: {dtype}\n"
-    
-    # Summary Statistics
-    story += "\n## Summary Statistics\n"
-    for stat, values in analysis['summary_stats'].items():
-        story += f"\n### {stat}:\n"
-        for column, value in values.items():
-            story += f"- {column}: {value}\n"
-    
-    # Missing Values
-    story += "\n## Missing Values\n"
-    for col, missing in analysis['missing_values'].items():
-        story += f"- {col}: {missing} missing values\n"
-    
-    # Visualizations
-    story += "\n## Visualizations\n"
-    story += "The following visualizations were generated to help understand the dataset better:\n"
-    story += "- **Correlation Heatmap**: Shows relationships between numeric features.\n"
-    story += "- **Distribution Plot**: Displays the distribution of the first numeric feature.\n"
-    
-    story += "\nThe visualizations have been saved as image files in this directory.\n"
-    
-    # Conclusion
-    story += "\n## Conclusion\n"
-    story += "This report provides a foundational understanding of the dataset. You can further delve into the data for deeper insights or model building.\n"
-
-    # Save the generated story
+    # Write the story to README.md
     with open(os.path.join(output_dir, "README.md"), "w") as f:
         f.write(story)
 
@@ -101,9 +78,6 @@ def analyze_and_generate_output(file_path):
     # Analyze dataset
     df, analysis = analyze_dataset(file_path)
 
-    if df is None:
-        return None
-
     # Generate visualizations
     generate_visualizations(df, output_dir)
 
@@ -113,18 +87,18 @@ def analyze_and_generate_output(file_path):
     return output_dir
 
 def main():
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Analyze CSV files and generate reports.")
-    parser.add_argument('files', nargs='*', help='List of CSV files to analyze')
-    args = parser.parse_args()
+    if len(sys.argv) < 2:
+        print("Usage: python autolysis.py dataset1.csv dataset2.csv ...")
+        sys.exit(1)
+
+    file_paths = sys.argv[1:]
+    output_dirs = []
 
     # Process each dataset file
-    output_dirs = []
-    for file_path in args.files:
+    for file_path in file_paths:
         if os.path.exists(file_path):
             output_dir = analyze_and_generate_output(file_path)
-            if output_dir:
-                output_dirs.append(output_dir)
+            output_dirs.append(output_dir)
         else:
             print(f"File {file_path} not found!")
 
