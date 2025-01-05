@@ -1,6 +1,6 @@
 # 🌟 TDS Project 02 - Your Automated Data Detective! 🚀
 
-![Owner Avatar](https://github.com/Irshadanwar/TDS_PROJECT_02)
+
 
 ## 🧐 What's This About?
 Welcome to **TDS Project 02**, your all-in-one automated data analysis tool! Whether you're exploring books, media, or global happiness, this project transforms raw data into actionable insights, stunning visuals, and detailed narratives—like having a personal data scientist at your fingertips!
